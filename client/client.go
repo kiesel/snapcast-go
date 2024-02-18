@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"runtime"
-	"strconv"
 )
 
 const (
@@ -39,31 +36,18 @@ func (client *Client) Dial() error {
 	return nil
 }
 
-func (client *Client) SendHello() error {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "localhost"
-	}
-	helloPayload := HelloPayload{
-		Arch:       runtime.GOARCH,
-		ClientName: "kiesel/snapcast-go",
-		HostName:   hostname,
-		OS:         runtime.GOOS,
-		Version:    "0.0.1",
-		ID:         strconv.Itoa(os.Getpid()),
-		Instance:   1,
-	}
-	helloPayloadString, err := json.Marshal(helloPayload)
+func (client *Client) SendHello(helloPayload *Hello) error {
+	helloPayloadString, err := json.Marshal(*helloPayload)
 	if err != nil {
 		return err
 	}
 
-	hello := Hello{
+	hello := HelloMessage{
 		payload: helloPayloadString,
 		size:    uint32(len(helloPayloadString)),
 	}
 
-	err = client.send(Base{
+	err = client.send(MessageHeader{
 		msgType: MSG_TYPE_HELLO,
 		size:    hello.size + 4,
 	})
@@ -82,8 +66,8 @@ func (client *Client) SendHello() error {
 	return writer.Flush()
 }
 
-func (client *Client) ReceiveServerSettings() (*ServerSettingsPayload, error) {
-	var payload *ServerSettingsPayload
+func (client *Client) ReceiveServerSettings() (*ServerSettings, error) {
+	var payload *ServerSettings
 	conn := *client.Conn
 
 	reader := bufio.NewReaderSize(conn, BASE_PACKET_LENGTH)
@@ -94,29 +78,56 @@ func (client *Client) ReceiveServerSettings() (*ServerSettingsPayload, error) {
 	}
 
 	if base.msgType != MSG_TYPE_SERVER_SETTINGS {
-		return payload, fmt.Errorf("expected message type SERVER_SETTINGS, received %d", base.msgType)
+		return payload, fmt.Errorf("expected message type SERVER_SETTINGS (%d), received %d", MSG_TYPE_SERVER_SETTINGS, base.msgType)
+
+	}
+
+	reader = bufio.NewReaderSize(conn, int(base.size))
+	buffer, err := readDynamicLengthBytes(reader)
+	if err != nil {
+		panic(err)
+	}
+
+	err = json.Unmarshal(*buffer, &payload)
+	return payload, err
+}
+
+func (client *Client) ReceiveCodecHeader() (*CodecHeader, error) {
+	var payload *CodecHeader
+	conn := *client.Conn
+
+	reader := bufio.NewReaderSize(conn, BASE_PACKET_LENGTH)
+	base, err := client.readBase(reader)
+
+	if err != nil {
+		panic(err)
+	}
+
+	if base.msgType != MSG_TYPE_CODEC_HEADER {
+		return payload, fmt.Errorf("expected message type CODEC_HEADER (%d), received %d", MSG_TYPE_CODEC_HEADER, base.msgType)
 	}
 
 	reader = bufio.NewReaderSize(conn, int(base.size))
 
-	serverSettings := ServerSettings{}
-	err = readLE(reader, []any{&serverSettings.size})
+	message := CodecHeader{}
+
+	buffer, err := readDynamicLengthBytes(reader)
 	if err != nil {
 		panic(err)
 	}
+	message.Codec = *buffer
 
-	serverSettings.payload = make([]byte, serverSettings.size)
-	_, err = io.ReadFull(reader, serverSettings.payload)
+	buffer, err = readDynamicLengthBytes(reader)
 	if err != nil {
 		panic(err)
 	}
+	message.Payload = *buffer
 
-	err = json.Unmarshal(serverSettings.payload, &payload)
-	return payload, err
+	return &message, nil
 }
 
-func (client *Client) readBase(reader io.Reader) (Base, error) {
-	base := Base{}
+func (client *Client) readBase(reader io.Reader) (MessageHeader, error) {
+	base := MessageHeader{}
 	err := readLE(reader, []any{
 		&base.msgType,
 		&base.id,
@@ -130,7 +141,7 @@ func (client *Client) readBase(reader io.Reader) (Base, error) {
 	return base, err
 }
 
-func (client *Client) send(base Base) error {
+func (client *Client) send(base MessageHeader) error {
 	writer := bufio.NewWriterSize(*client.Conn, BASE_PACKET_LENGTH)
 
 	err := writeLE(writer, []any{
@@ -173,4 +184,17 @@ func readLE(r io.Reader, data []any) error {
 	}
 
 	return nil
+}
+
+func readDynamicLengthBytes(r io.Reader) (*[]byte, error) {
+	var size uint32
+	err := readLE(r, []any{&size})
+	if err != nil {
+		panic(err)
+	}
+
+	buffer := make([]byte, size)
+	_, err = io.ReadFull(r, buffer)
+
+	return &buffer, err
 }

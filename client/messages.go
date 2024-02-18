@@ -1,6 +1,6 @@
 package client
 
-type Base struct {
+type MessageHeader struct {
 	msgType      uint16
 	id           uint16
 	refersTo     uint16
@@ -11,13 +11,24 @@ type Base struct {
 	size         uint32
 }
 
-type Hello struct {
-	Base
+type HelloMessage struct {
 	size    uint32
 	payload []byte
 }
 
-type HelloPayload struct {
+// type ServerSettingsMessage struct {
+// 	size    uint32
+// 	payload []byte
+// }
+
+// type CodecHeaderMessage struct {
+// 	codecSize uint32
+// 	codec     []byte
+// 	size      uint32
+// 	payload   []byte
+// }
+
+type Hello struct {
 	Arch                      string `json:"Arch"`
 	ClientName                string `json:"ClientName"`
 	HostName                  string `json:"HostName"`
@@ -30,13 +41,13 @@ type HelloPayload struct {
 }
 
 type ServerSettings struct {
-	size    uint32
-	payload []byte
-}
-
-type ServerSettingsPayload struct {
 	BufferMS int  `json:"bufferMS"`
 	Latency  int  `json:"latency"`
 	Muted    bool `json:"muted"`
 	Volume   int  `json:"volume"`
+}
+
+type CodecHeader struct {
+	Codec   []byte
+	Payload []byte
 }

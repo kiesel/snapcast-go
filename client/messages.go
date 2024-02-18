@@ -1,5 +1,7 @@
 package client
 
+import "fmt"
+
 type MessageHeader struct {
 	msgType      uint16
 	id           uint16
@@ -47,7 +49,21 @@ type ServerSettings struct {
 	Volume   int  `json:"volume"`
 }
 
+func (settings *ServerSettings) String() string {
+	return fmt.Sprintf("Settings = %+v\n", *settings)
+}
+
 type CodecHeader struct {
 	Codec   []byte
+	Payload []byte
+}
+
+func (settings *CodecHeader) String() string {
+	return fmt.Sprintf("Codec %s", settings.Codec)
+}
+
+type WireChunk struct {
+	Sec     int32
+	Usec    int32
 	Payload []byte
 }

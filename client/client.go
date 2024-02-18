@@ -21,9 +21,11 @@ const (
 )
 
 type Client struct {
-	Host string
-	Port int
-	Conn *net.Conn
+	Host           string
+	Port           int
+	Conn           *net.Conn
+	ServerSettings *ServerSettings
+	CodecHeader    *CodecHeader
 }
 
 func (client *Client) Dial() error {
@@ -66,49 +68,20 @@ func (client *Client) SendHello(helloPayload *Hello) error {
 	return writer.Flush()
 }
 
-func (client *Client) ReceiveServerSettings() (*ServerSettings, error) {
-	var payload *ServerSettings
-	conn := *client.Conn
-
-	reader := bufio.NewReaderSize(conn, BASE_PACKET_LENGTH)
-	base, err := client.readBase(reader)
-
-	if err != nil {
-		panic(err)
-	}
-
-	if base.msgType != MSG_TYPE_SERVER_SETTINGS {
-		return payload, fmt.Errorf("expected message type SERVER_SETTINGS (%d), received %d", MSG_TYPE_SERVER_SETTINGS, base.msgType)
-
-	}
-
-	reader = bufio.NewReaderSize(conn, int(base.size))
+func (client *Client) readServerSettings(header MessageHeader) (*ServerSettings, error) {
+	reader := bufio.NewReaderSize(*client.Conn, int(header.size))
 	buffer, err := readDynamicLengthBytes(reader)
 	if err != nil {
 		panic(err)
 	}
 
+	var payload *ServerSettings
 	err = json.Unmarshal(*buffer, &payload)
 	return payload, err
 }
 
-func (client *Client) ReceiveCodecHeader() (*CodecHeader, error) {
-	var payload *CodecHeader
-	conn := *client.Conn
-
-	reader := bufio.NewReaderSize(conn, BASE_PACKET_LENGTH)
-	base, err := client.readBase(reader)
-
-	if err != nil {
-		panic(err)
-	}
-
-	if base.msgType != MSG_TYPE_CODEC_HEADER {
-		return payload, fmt.Errorf("expected message type CODEC_HEADER (%d), received %d", MSG_TYPE_CODEC_HEADER, base.msgType)
-	}
-
-	reader = bufio.NewReaderSize(conn, int(base.size))
-
+func (client *Client) readCodecHeader(header MessageHeader) (*CodecHeader, error) {
+	reader := bufio.NewReaderSize(*client.Conn, int(header.size))
 	message := CodecHeader{}
 
 	buffer, err := readDynamicLengthBytes(reader)
@@ -126,7 +99,70 @@ func (client *Client) ReceiveCodecHeader() (*CodecHeader, error) {
 	return &message, nil
 }
 
-func (client *Client) readBase(reader io.Reader) (MessageHeader, error) {
+func (client *Client) readWireChunk(header MessageHeader) (*WireChunk, error) {
+	chunk := WireChunk{}
+
+	r := bufio.NewReaderSize(*client.Conn, int(header.size))
+
+	err := readLE(r, []any{&chunk.Sec, &chunk.Usec})
+	if err != nil {
+		panic(err)
+	}
+
+	buffer, err := readDynamicLengthBytes(r)
+	if err != nil {
+		panic(err)
+	}
+
+	chunk.Payload = *buffer
+	return &chunk, nil
+}
+
+func (client *Client) ReadMessage() (any, error) {
+	header, err := client.readHeader()
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Received [type %d], [id %d], [refers %d] length %d\n", header.msgType, header.id, header.refersTo, header.size)
+
+	switch header.msgType {
+	case MSG_TYPE_CODEC_HEADER:
+		codec, err := client.readCodecHeader(header)
+		if err != nil {
+			return nil, err
+		}
+		client.CodecHeader = codec
+		return codec, nil
+
+	case MSG_TYPE_SERVER_SETTINGS:
+		settings, err := client.readServerSettings(header)
+		if err != nil {
+			return nil, err
+		}
+		client.ServerSettings = settings
+		return settings, nil
+
+	case MSG_TYPE_WIRE_CHUNK:
+		return client.readWireChunk(header)
+
+	default:
+		fmt.Printf("Reading message type %d not implemented - discarding %d bytes\n", header.msgType, header.size)
+
+		buffer := make([]byte, header.size)
+		_, err = (*client.Conn).Read(buffer)
+
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return nil, nil
+}
+
+func (client *Client) readHeader() (MessageHeader, error) {
+	reader := bufio.NewReaderSize(*client.Conn, BASE_PACKET_LENGTH)
+
 	base := MessageHeader{}
 	err := readLE(reader, []any{
 		&base.msgType,
@@ -138,6 +174,7 @@ func (client *Client) readBase(reader io.Reader) (MessageHeader, error) {
 		&base.receivedUsec,
 		&base.size,
 	})
+
 	return base, err
 }
 

@@ -58,18 +58,19 @@ func main() {
 		panic(err)
 	}
 
-	server, err := snapClient.ReceiveServerSettings()
-	if err != nil {
-		panic(err)
+	for {
+		message, err := snapClient.ReadMessage()
+		if err != nil {
+			panic(err)
+		}
+
+		switch t := message.(type) {
+		case *client.CodecHeader:
+			fmt.Println("New codec:", message)
+		case *client.ServerSettings:
+			fmt.Println("New server settings:", message)
+		default:
+			fmt.Printf("Got type %T\n", t)
+		}
 	}
-
-	fmt.Println(server)
-
-	codec, err := snapClient.ReceiveCodecHeader()
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println(codec)
-	fmt.Printf("%s\n%s\n", codec.Codec, codec.Payload)
 }

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -12,19 +10,18 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gopxl/beep"
 	"github.com/gopxl/beep/flac"
 	"github.com/gopxl/beep/speaker"
 	"github.com/gopxl/beep/wav"
 	"github.com/kiesel/snapcast/client"
+	"github.com/smallnest/ringbuffer"
 )
 
 var serverUrl string
 
-var streamer beep.Streamer
-var buffer bytes.Buffer
-var writer io.Writer = bufio.NewWriterSize(&buffer, 102400)
-var reader = bufio.NewReaderSize(&buffer, 1024)
+var buffer ringbuffer.RingBuffer = *ringbuffer.New(1024 * 1024) // 1 MiB
+var writer io.Writer = &buffer
+var reader = &buffer
 var lastCodec *client.CodecHeader
 
 func init() {
@@ -89,6 +86,7 @@ func main() {
 		case *client.WireChunk:
 			wirechunk := message.(*client.WireChunk)
 			writer.Write(wirechunk.Payload)
+			fmt.Printf("Buffer: %db used, %db free\n", buffer.Length(), buffer.Free())
 			lateInitCodec()
 
 		default:
@@ -110,7 +108,7 @@ func lateInitCodec() {
 	codec := string(lastCodec.Codec)
 	switch codec {
 	case "pcm":
-		fmt.Printf("Attempting to init PCM codec with %d buffered bytes ...\n", buffer.Len())
+		fmt.Printf("Attempting to init PCM codec with %d buffered bytes ...\n", buffer.Length())
 		streamer, format, err := wav.Decode(reader)
 		if err != nil {
 			fmt.Println(err)
@@ -125,11 +123,11 @@ func lateInitCodec() {
 		return
 
 	case "flac":
-		fmt.Printf("%d | %d", buffer.Available(), buffer.Cap())
-		if buffer.Len() < (102400 / 2) {
+		fmt.Printf("%d | %d", buffer.Length(), buffer.Free())
+		if buffer.Free() < (buffer.Length() / 2) {
 			return
 		}
-		fmt.Printf("Attempting to init FLAC codec with %d buffered bytes ...\n", buffer.Len())
+		fmt.Printf("Attempting to init FLAC codec with %d buffered bytes ...\n", buffer.Length())
 		streamer, format, err := flac.Decode(reader)
 		if err != nil {
 			fmt.Println(err)

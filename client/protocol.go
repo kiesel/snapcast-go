@@ -124,12 +124,12 @@ func (client *Client) ReadMessage() (any, error) {
 		return nil, err
 	}
 
-	fmt.Printf("Received [type %d], [id %d], [refers %d] length %d\n",
-		header.msgType,
-		header.id,
-		header.refersTo,
-		header.size,
-	)
+	// fmt.Printf("Received [type %d], [id %d], [refers %d] length %d\n",
+	// 	header.msgType,
+	// 	header.id,
+	// 	header.refersTo,
+	// 	header.size,
+	// )
 
 	switch header.msgType {
 	case MSG_TYPE_CODEC_HEADER:

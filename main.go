@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"net/url"
@@ -10,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gopxl/beep"
 	"github.com/gopxl/beep/flac"
 	"github.com/gopxl/beep/speaker"
 	"github.com/gopxl/beep/vorbis"
@@ -20,7 +20,9 @@ import (
 var serverUrl string
 
 var buffer client.Buffer = client.NewBuffer(1024 * 1024) // 1 MiB
-var lastCodec *client.CodecHeader
+var streamer beep.StreamSeekCloser
+var format beep.Format
+var codecHeader *client.CodecHeader
 
 func init() {
 	flag.StringVar(&serverUrl, "url", "tcp://localhost:1704", "server address")
@@ -84,8 +86,10 @@ func main() {
 		case *client.WireChunk:
 			wirechunk := message.(*client.WireChunk)
 			buffer.Write(wirechunk.Payload)
-			fmt.Printf("Buffer: %db used, %db free\n", buffer.Length(), buffer.Free())
-			lateInitCodec()
+
+			if streamer == nil && codecHeader != nil && buffer.Length() > 10240 /* 10kb */ {
+				initCodec()
+			}
 
 		default:
 			fmt.Printf("Got type %T\n", t)
@@ -94,72 +98,41 @@ func main() {
 }
 
 func handleCodecHeader(message *client.CodecHeader) {
-	lastCodec = message
-	fmt.Println(hex.Dump(message.Payload))
+	codecHeader = message
 	buffer.Write(message.Payload)
 }
 
-func lateInitCodec() {
-	if lastCodec == nil {
-		return
-	}
+func initCodec() {
+	var err error
 
-	codec := string(lastCodec.Codec)
+	codec := string(codecHeader.Codec)
+	fmt.Printf("Attempting to init %q codec with [%d] bytes ...\n", codec, buffer.Length())
 	switch codec {
 	case "pcm":
-		fmt.Printf("Attempting to init PCM codec with %d buffered bytes ...\n", buffer.Length())
-		streamer, format, err := wav.Decode(buffer)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		err = speaker.Init(format.SampleRate, format.SampleRate.N(time.Second))
-		if err != nil {
-			panic(err)
-		}
-		speaker.Play(streamer)
-		lastCodec = nil
-		return
+		streamer, format, err = wav.Decode(buffer)
 
 	case "flac":
-		fmt.Printf("%d | %d", buffer.Length(), buffer.Free())
-		if buffer.Free() < (buffer.Length() / 2) {
-			return
-		}
-		fmt.Printf("Attempting to init FLAC codec with %d buffered bytes ...\n", buffer.Length())
-		streamer, format, err := flac.Decode(buffer)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
-		if err != nil {
-			panic(err)
-		}
-		speaker.Play(streamer)
-		lastCodec = nil
-		return
+		streamer, format, err = flac.Decode(buffer)
 
 	case "ogg":
-		fmt.Printf("%d | %d", buffer.Length(), buffer.Free())
-		if buffer.Free() < (buffer.Length() / 2) {
-			return
-		}
-		fmt.Printf("Attempting to init OGG codec with %d buffered bytes ...\n", buffer.Length())
-		streamer, format, err := vorbis.Decode(buffer)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		err = speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
-		if err != nil {
-			panic(err)
-		}
-		speaker.Play(streamer)
-		lastCodec = nil
-		return
+		streamer, format, err = vorbis.Decode(buffer)
 
 	default:
 		panic(fmt.Errorf("unsupported codec %s", codec))
 	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	bufferSize := format.SampleRate.N(time.Second / 10)
+	fmt.Printf("Init player, sample rate [%d], buffer size [%d]\n", format.SampleRate, bufferSize)
+	err = speaker.Init(format.SampleRate, bufferSize)
+	if err != nil {
+		panic(err)
+	}
+	speaker.Play(streamer)
+	codecHeader = nil
+
+	fmt.Println("Sucessfully initialized player")
 }
